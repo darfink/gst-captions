@@ -30,24 +30,24 @@ that suits the loaded family.
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `model‑path` | string | (none,&nbsp;required) | Path to a GGUF model understood by transcribe.cpp |
+| `model-path` | string | (none, required) | Path to a GGUF model understood by transcribe.cpp |
 | `mode` | enum | `auto` | `auto` streams when the model supports it (see [Modes](#modes)), else `stream` or `chunked` |
 | `backend` | enum | `auto` | Which compute backend to request: `auto`, `cpu`, `cpu-accel`, `metal`, `vulkan`, `cuda`. `cpu` is the deterministic choice |
-| `n‑threads` | int | `0` | CPU threads for ops that run on CPU; `0` uses the library default |
-| `gpu‑device` | int | `0` | GPU device registry index; `0` auto-selects, preferring discrete GPUs |
-| `model‑info` | structure&nbsp;(read‑only) | — | What the loaded model reported about itself; unset until loaded |
+| `n-threads` | int | `0` | CPU threads for ops that run on CPU; `0` uses the library default |
+| `gpu-device` | int | `0` | GPU device registry index; `0` auto-selects, preferring discrete GPUs |
+| `model-info` | structure (read-only) | — | What the loaded model reported about itself; unset until loaded |
 
 Timing. The first three add up to the latency reported downstream:
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `latency` | uint&nbsp;(ms) | `1000` | Declared processing budget. A live pipeline warns when inference runs slower than real time |
-| `chunk‑duration` | uint&nbsp;(ms) | `4000` | `mode=chunked`: new audio accumulated before each inference run |
-| `live‑edge‑offset` | uint&nbsp;(ms) | `1000` | `mode=chunked`: trailing audio whose words are withheld as unstable. Must be less than `chunk-duration` |
-| `discont‑threshold` | uint&nbsp;(ms) | `500` | A timeline jump larger than this finalizes the current stream and starts a new one |
+| `latency` | uint (ms) | `1000` | Declared processing budget. A live pipeline warns when inference runs slower than real time |
+| `chunk-duration` | uint (ms) | `4000` | `mode=chunked`: new audio accumulated before each inference run |
+| `live-edge-offset` | uint (ms) | `1000` | `mode=chunked`: trailing audio whose words are withheld as unstable. Must be less than `chunk-duration` |
+| `discont-threshold` | uint (ms) | `500` | A timeline jump larger than this finalizes the current stream and starts a new one |
 | `vad` | boolean | `true` | `mode=stream`: discard audio until speech is detected, so the model never opens its stream on silence |
-| `vad‑threshold` | float | `0.6` | Score from 0 to 1 a frame must reach to count as speech. Higher is stricter |
-| `warmup‑pad` | uint&nbsp;(ms) | `80` | `mode=stream`: milliseconds of digital silence fed as a priming chunk before the first speech. `0` disables it |
+| `vad-threshold` | float | `0.6` | Score from 0 to 1 a frame must reach to count as speech. Higher is stricter |
+| `warmup-pad` | uint (ms) | `80` | `mode=stream`: milliseconds of digital silence fed as a priming chunk before the first speech. `0` disables it |
 
 Text and language:
 
@@ -55,28 +55,28 @@ Text and language:
 | --- | --- | --- | --- |
 | `language` | string | (none) | Source language hint (ISO code); unset auto-detects |
 | `task` | enum | `transcribe` | `transcribe` speech in its source language, or `translate` it into the target language |
-| `target‑language` | string | (none) | Target language (ISO code) when `task=translate` |
+| `target-language` | string | (none) | Target language (ISO code) when `task=translate` |
 | `timestamps` | enum | `auto` | Timestamp granularity to request: `none`, `auto`, `segment`, `word`, `token`. A request, not a guarantee (see [Output](#output)) |
 | `pnc` | enum | `default` | Punctuation and capitalization toggle, on supporting families |
 | `itn` | enum | `default` | Inverse text normalization toggle, on supporting families |
-| `keep‑special‑tags` | boolean | `false` | Keep special vocabulary tags in the returned text |
+| `keep-special-tags` | boolean | `false` | Keep special vocabulary tags in the returned text |
 
 Streaming and decoding:
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `commit‑policy` | enum | `auto` | `mode=stream`: when committed text is allowed to grow: `auto`, `on-finalize`, `stable-prefix` |
-| `stable‑prefix‑agreement‑n` | uint | `0` | `mode=stream`: consecutive agreeing hypotheses before a prefix commits; `0` uses the library default |
-| `n‑ctx` | int | `0` | Decoder context cap in tokens; `0` uses the model maximum |
-| `kv‑type` | enum | `auto` | K/V activation precision: `auto`, `f32`, `f16` |
-| `spec‑k‑drafts` | int | `-1` | Speculative-decode draft length; `-1` family default, `0` disabled |
-| `family‑options` | structure | (none) | Family-specific knobs, as a structure named after the family (see [Examples](#transcriber-examples)) |
+| `commit-policy` | enum | `auto` | `mode=stream`: when committed text is allowed to grow: `auto`, `on-finalize`, `stable-prefix` |
+| `stable-prefix-agreement-n` | uint | `0` | `mode=stream`: consecutive agreeing hypotheses before a prefix commits; `0` uses the library default |
+| `n-ctx` | int | `0` | Decoder context cap in tokens; `0` uses the model maximum |
+| `kv-type` | enum | `auto` | K/V activation precision: `auto`, `f32`, `f16` |
+| `spec-k-drafts` | int | `-1` | Speculative-decode draft length; `-1` family default, `0` disabled |
+| `family-options` | structure | (none) | Family-specific knobs, as a structure named after the family (see [Examples](#transcriber-examples)) |
 
 Flow control on a live source:
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `queue‑size` | uint | `32` | How many audio buffers may be queued for inference |
+| `queue-size` | uint | `32` | How many audio buffers may be queued for inference |
 | `overrun` | enum | `block` | `block` upstream until the worker catches up, or `drop` audio that does not fit the queue |
 
 Signals and events: one signal, `partial-transcript` (see [Partials](#partials)).
@@ -194,8 +194,8 @@ batched toward a sentence boundary — the element adds no formatter latency.
 | --- | --- | --- | --- |
 | `columns` | uint | `42` | Maximum display width per line (Unicode display width, so wide CJK characters count as two) |
 | `lines` | uint | `2` | Number of lines in the roll-up window |
-| `clear‑after` | uint&nbsp;(ms) | `3000` | Media-time silence after the previous input end before emitting an explicit clear; `0` disables |
-| `break‑on‑sentence` | boolean | `true` | Finish the current line at sentence-final punctuation even if it is not full |
+| `clear-after` | uint (ms) | `3000` | Media-time silence after the previous input end before emitting an explicit clear; `0` disables |
+| `break-on-sentence` | boolean | `true` | Finish the current line at sentence-final punctuation even if it is not full |
 
 All properties stay writable while playing, but affect future wrapping only:
 lines that are already frozen keep the geometry they were built with.
@@ -226,8 +226,8 @@ original media buffers unchanged.
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `message‑name` | enum | `oncaption` | AMF0 script-data message name carrying each cue: `oncaption` or `ontextdata` |
-| `input‑mode` | enum | `timed` | Interpret text buffers as finite `timed` intervals, or as persistent `replacement` states |
+| `message-name` | enum | `oncaption` | AMF0 script-data message name carrying each cue: `oncaption` or `ontextdata` |
+| `input-mode` | enum | `timed` | Interpret text buffers as finite `timed` intervals, or as persistent `replacement` states |
 | `prime` | boolean | `true` | Write one empty cue at the first timestamped FLV position to declare the subtitle stream |
 
 (Base-class aggregator properties such as `latency` behave as documented
@@ -268,7 +268,7 @@ once. The muxer also accepts sentence-length or accumulated buffers in
 | `cuda` | off | GPU backend, forwarded to `transcribe-cpp` (NVIDIA) |
 | `vulkan` | off | GPU backend, forwarded to `transcribe-cpp` (cross-vendor) |
 | `openmp` | off | CPU threading backend, forwarded to `transcribe-cpp` |
-| `dynamic‑backends` | off | Runtime backend loading, forwarded to `transcribe-cpp` |
+| `dynamic-backends` | off | Runtime backend loading, forwarded to `transcribe-cpp` |
 
 ### Layout
 
