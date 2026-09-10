@@ -250,7 +250,12 @@ is AMF0 with one `text` property; `onCaption` is the default because it
 avoids a diagnostic FFmpeg emits for `onTextData`. Cue text past the AMF0
 short-string limit is truncated with a warning. After coverage is proven a
 transition keeps its original timestamp — never clamped to the media
-position.
+position. Upstream note: file-mode `flvmux` strips buffer timestamps, so set
+`streamable=true` on it (or stream to a non-seekable sink); otherwise every
+media buffer arrives without PTS, no cue can be placed, and the element warns
+once. The muxer also accepts sentence-length or accumulated buffers in
+`input-mode=timed`, and the roll-up accepts word buffers from any transcriber
+(see “Mixing with the ecosystem” in the root README).
 
 ### Features
 

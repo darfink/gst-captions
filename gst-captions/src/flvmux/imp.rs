@@ -92,6 +92,10 @@ struct State {
   consumed_text_end: Option<gst::ClockTime>,
   caption: CaptionTimeline,
   primed: bool,
+  /// Whether the missing-timestamp warning below has fired. `flvmux` in its
+  /// default file mode strips buffer timestamps, which leaves no media
+  /// position to attach cues to; warn once instead of once per buffer.
+  warned_untimestamped_media: bool,
   /// A cue was on screen when the text timeline restarted, so downstream is
   /// still displaying text that no longer belongs to the current timeline.
   needs_timeline_clear: bool,
@@ -324,6 +328,20 @@ impl CaptionsFlvMux {
         .flv_sink
         .pop_buffer()
         .ok_or_else(|| self.protocol_error("FLV buffer disappeared from aggregator queue"))?;
+      // Headers and codec setup carry no timestamp by design. Anything else
+      // without one is almost certainly `flvmux` in file mode, which only
+      // copies timestamps downstream in `streamable=true` (or toward a
+      // non-seekable sink such as RTMP). Without a media position no cue
+      // can ever be placed, so say so once rather than dropping the whole
+      // caption track in silence.
+      if !buffer.flags().contains(gst::BufferFlags::HEADER) && !state.warned_untimestamped_media {
+        state.warned_untimestamped_media = true;
+        gst::warning!(
+          CAT,
+          imp = self,
+          "FLV media buffer without PTS: `flvmux` only forwards timestamps in streamable mode, so captions cannot be placed; set streamable=true on `flvmux` (or stream to a non-seekable sink)"
+        );
+      }
       return Ok(vec![buffer]);
     };
 

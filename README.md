@@ -48,11 +48,43 @@ gst-launch-1.0 -e filesrc location=speech.wav ! decodebin ! audioconvert ! audio
 3. Mux the captions into an FLV file alongside audio and video:
 
 ```sh
-gst-launch-1.0 -e videotestsrc is-live=true ! x264enc tune=zerolatency ! flvmux name=fm ! captionsflvmux name=cm ! filesink location=captions.flv audiotestsrc is-live=true ! voaacenc ! fm. filesrc location=speech.wav ! decodebin ! audioconvert ! audioresample ! captionstranscriber model-path=model.gguf ! captionsrollup ! cm.text
+gst-launch-1.0 -e videotestsrc is-live=true ! x264enc tune=zerolatency ! flvmux name=fm streamable=true ! captionsflvmux name=cm ! filesink location=captions.flv audiotestsrc is-live=true ! voaacenc ! fm. filesrc location=speech.wav ! decodebin ! audioconvert ! audioresample ! captionstranscriber model-path=model.gguf ! captionsrollup ! cm.text
 ```
+
+`streamable=true` matters: file-mode `flvmux` strips buffer timestamps, leaving
+no media position to attach cues to.
 
 Swap `filesrc` for any live source to caption live; the transcriber takes
 its live path automatically when upstream answers the latency query as live.
+
+## Mixing with the ecosystem
+
+The trio above is the production wiring, but each element also stands alone
+against stock elements:
+
+- `captionstranscriber ! textwrap` — format words into cues with the stock
+  text formatter (verified with a real model).
+- Any word-buffer transcriber (whisper-family, stock
+  `transcribecpptranscriber`) into `captionsrollup` — the roll-up only needs
+  `text/x-raw` word buffers with PTS and duration; leading spaces are fine
+  (verified with the stock element and a real model).
+- Sentence or accumulated buffers into `captionsflvmux` in `input-mode=timed`
+  — longer cues arrive as intervals the muxer shows and clears.
+- Cue grouping: the transcriber emits the `rstranscribe/final-transcript`
+  event at utterance boundaries, the convention stock cue-grouping elements
+  drain on.
+
+The same `flvmux` gotcha applies whoever feeds the muxer: toward a file you
+need `streamable=true`, otherwise you get a valid FLV with zero caption tags
+(toward RTMP or another non-seekable sink it already streams). `captionsflvmux`
+warns once when it sees untimestamped media.
+
+Model-backed interop tests live in `gst-captions/tests/interop.rs`; run them
+with a model and a WAV file:
+
+```sh
+GST_CAPTIONS_MODEL=model.gguf GST_CAPTIONS_WAV=speech.wav cargo test --release --test interop
+```
 
 ## Build
 
