@@ -99,50 +99,51 @@ cd gst-captions
 cargo build --release
 ```
 
-1. Try it straight from the build tree — no install or root access needed:
+1. Try it straight from the build tree:
 
 ```sh
 export GST_PLUGIN_PATH="$PWD/target/release"
 gst-inspect-1.0 captionstranscriber captionsrollup captionsflvmux
 ```
 
-2. Install for your user only (no root needed):
+2. Install for your user:
 
 ```sh
 mkdir -p ~/.local/share/gstreamer-1.0/plugins
-install -m 0755 $(ls target/release/libgstcaptions.{so,dylib} 2>/dev/null) ~/.local/share/gstreamer-1.0/plugins/
+install -m 0755 target/release/libgstcaptions.so ~/.local/share/gstreamer-1.0/plugins/
 ```
+
+(On macOS the file is `libgstcaptions.dylib`.)
 
 3. Or system-wide (needs root):
 
 ```sh
-sudo install -m 0755 $(ls target/release/libgstcaptions.{so,dylib} 2>/dev/null) "$(pkg-config --variable=pluginsdir gstreamer-1.0)/"
+sudo install -m 0755 target/release/libgstcaptions.so "$(pkg-config --variable=pluginsdir gstreamer-1.0)/"
 ```
 
-The `ls` picks whichever library the platform built (`.so` on Linux,
-`.dylib` on macOS), so the same commands paste on both. Prefer 1 for a
-quick try and 2 for regular use; 3 is only for when every user on the
-machine needs the plugin.
-
-On macOS with the GStreamer framework build, point pkg-config at it first:
+If you installed GStreamer from its official macOS framework installer (not Homebrew), export this first so `pkg-config` finds it:
 
 ```sh
 export PKG_CONFIG_PATH=/Library/Frameworks/GStreamer.framework/Versions/Current/lib/pkgconfig:$PKG_CONFIG_PATH
-export DYLD_FALLBACK_LIBRARY_PATH=/Library/Frameworks/GStreamer.framework/Versions/Current/lib:$DYLD_FALLBACK_LIBRARY_PATH
-export PATH=/Library/Frameworks/GStreamer.framework/Versions/Current/bin:$PATH
 ```
 
-GPU backends are opt-in cargo features forwarded to `transcribe-cpp`
-(`metal`, `cuda`, `vulkan`, `openmp`, `dynamic-backends`); the default
-build is CPU-only so it compiles everywhere without GPU toolchains:
+GPU backends are opt-in cargo features forwarded to `transcribe-cpp`; the
+default build is CPU-only so it compiles everywhere without GPU toolchains.
+The element's `backend` property defaults to `auto`, which picks the best
+compiled-in backend at runtime and falls back to CPU, so rebuilding with a
+GPU feature is enough to use it — no property change needed:
 
 ```sh
-cargo build --release --features metal
+cargo build --release --features metal # macOS
+cargo build --release --features cuda # NVIDIA Linux
+```
+
+```sh
 cargo build --release --no-default-features --features flvmux,rollup
 ```
 
-The second line builds just the caption formatting and muxing, with no C++
-toolchain, cmake, or model backend involved.
+This builds just caption formatting and muxing, with no C++ toolchain,
+cmake, or model backend involved.
 
 ## Testing
 
