@@ -30,6 +30,7 @@ WORKDIR /work
 # Dependencies first, so editing the elements does not rebuild the world.
 COPY Cargo.toml Cargo.lock ./
 COPY gst-captions/Cargo.toml gst-captions/build.rs ./gst-captions/
+COPY gst-captions/examples ./gst-captions/examples
 RUN mkdir -p gst-captions/src && echo '' > gst-captions/src/lib.rs && cargo build --release || true
 
 COPY gst-captions/src ./gst-captions/src

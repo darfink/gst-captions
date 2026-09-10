@@ -66,7 +66,10 @@ fn rollup_accepts_whisper_shaped_word_buffers() {
   }
   init();
   let mut harness = gst_check::Harness::new("captionsrollup");
-  harness.element().unwrap().set_property("break-on-sentence", false);
+  harness
+    .element()
+    .unwrap()
+    .set_property("break-on-sentence", false);
   harness.element().unwrap().set_property("clear-after", 0u32);
   harness.set_src_caps_str("text/x-raw, format=utf8");
 
@@ -114,7 +117,11 @@ fn mux_accepts_sentence_buffers_as_timed_intervals() {
     let map = buffer.map_readable().unwrap();
     let header = parse_tag_header(map.as_slice()).expect("tag header");
     if header.tag_type == TAG_TYPE_SCRIPT_DATA {
-      if map.as_slice().windows(sentence.len()).any(|w| w == sentence.as_bytes()) {
+      if map
+        .as_slice()
+        .windows(sentence.len())
+        .any(|w| w == sentence.as_bytes())
+      {
         saw_sentence = true;
       } else {
         saw_clear = true;
@@ -142,32 +149,43 @@ fn rollup_replacement_states_reach_flv_script_tags() {
   )
   .unwrap();
   let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
-  let appsink = pipeline.by_name("sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
-  let appsrc = pipeline.by_name("textsrc").unwrap().downcast::<gst_app::AppSrc>().unwrap();
-  appsrc.set_caps(Some(&gst::Caps::builder("text/x-raw").field("format", "utf8").build()));
+  let appsink = pipeline
+    .by_name("sink")
+    .unwrap()
+    .downcast::<gst_app::AppSink>()
+    .unwrap();
+  let appsrc = pipeline
+    .by_name("textsrc")
+    .unwrap()
+    .downcast::<gst_app::AppSrc>()
+    .unwrap();
+  appsrc.set_caps(Some(
+    &gst::Caps::builder("text/x-raw")
+      .field("format", "utf8")
+      .build(),
+  ));
   appsrc.set_format(gst::Format::Time);
-  appsrc.push_buffer(word_buffer(0, 2000, "hello world")).unwrap();
-  appsrc.push_buffer(word_buffer(2000, 2000, "second state")).unwrap();
+  appsrc
+    .push_buffer(word_buffer(0, 2000, "hello world"))
+    .unwrap();
+  appsrc
+    .push_buffer(word_buffer(2000, 2000, "second state"))
+    .unwrap();
   appsrc.end_of_stream().unwrap();
   pipeline.set_state(gst::State::Playing).unwrap();
   let mut script_tags = 0;
   let mut saw_words = false;
-  loop {
-    match appsink.try_pull_sample(gst::ClockTime::from_seconds(20)) {
-      Some(sample) => {
-        let buffer = sample.buffer().unwrap();
-        let map = buffer.map_readable().unwrap();
-        if let Some(header) = parse_tag_header(map.as_slice()) {
-          if header.tag_type == TAG_TYPE_SCRIPT_DATA {
-            script_tags += 1;
-            let bytes = map.as_slice();
-            if bytes.windows(5).any(|w| w == b"hello") || bytes.windows(6).any(|w| w == b"second") {
-              saw_words = true;
-            }
-          }
+  while let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_seconds(20)) {
+    let buffer = sample.buffer().unwrap();
+    let map = buffer.map_readable().unwrap();
+    if let Some(header) = parse_tag_header(map.as_slice()) {
+      if header.tag_type == TAG_TYPE_SCRIPT_DATA {
+        script_tags += 1;
+        let bytes = map.as_slice();
+        if bytes.windows(5).any(|w| w == b"hello") || bytes.windows(6).any(|w| w == b"second") {
+          saw_words = true;
         }
       }
-      None => break,
     }
   }
   pipeline.set_state(gst::State::Null).unwrap();
@@ -187,18 +205,13 @@ fn gated_model_and_wav() -> Option<(String, String)> {
 
 fn pull_text_samples(appsink: &gst_app::AppSink, timeout_secs: u64) -> Vec<String> {
   let mut out = Vec::new();
-  loop {
-    match appsink.try_pull_sample(gst::ClockTime::from_seconds(timeout_secs)) {
-      Some(sample) => {
-        let buffer = sample.buffer().unwrap();
-        let map = buffer.map_readable().unwrap();
-        if let Ok(text) = std::str::from_utf8(map.as_slice()) {
-          if !text.trim().is_empty() {
-            out.push(text.to_owned());
-          }
-        }
+  while let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_seconds(timeout_secs)) {
+    let buffer = sample.buffer().unwrap();
+    let map = buffer.map_readable().unwrap();
+    if let Ok(text) = std::str::from_utf8(map.as_slice()) {
+      if !text.trim().is_empty() {
+        out.push(text.to_owned());
       }
-      None => break,
     }
   }
   out
@@ -235,7 +248,11 @@ fn transcriber_feeds_stock_textwrap() {
   );
   let pipeline = gst::parse::launch(&launch).unwrap();
   let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
-  let appsink = pipeline.by_name("sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+  let appsink = pipeline
+    .by_name("sink")
+    .unwrap()
+    .downcast::<gst_app::AppSink>()
+    .unwrap();
   pipeline.set_state(gst::State::Playing).unwrap();
   let texts = pull_text_samples(&appsink, 120);
   let error = drain_pipeline_error(&pipeline);
@@ -263,11 +280,18 @@ fn stock_transcriber_feeds_our_rollup() {
   );
   let pipeline = gst::parse::launch(&launch).unwrap();
   let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
-  let appsink = pipeline.by_name("sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+  let appsink = pipeline
+    .by_name("sink")
+    .unwrap()
+    .downcast::<gst_app::AppSink>()
+    .unwrap();
   pipeline.set_state(gst::State::Playing).unwrap();
   let texts = pull_text_samples(&appsink, 120);
   let error = drain_pipeline_error(&pipeline);
   pipeline.set_state(gst::State::Null).unwrap();
   assert!(error.is_none(), "pipeline error: {error:?}");
-  assert!(!texts.is_empty(), "expected roll-up states from stock transcriber");
+  assert!(
+    !texts.is_empty(),
+    "expected roll-up states from stock transcriber"
+  );
 }
