@@ -1,0 +1,4 @@
+# Use the git CLI for git dependencies so local git configuration (such as
+# url.insteadOf rewrites) is honoured. Harmless on CI runners.
+[net]
+git-fetch-with-cli = true

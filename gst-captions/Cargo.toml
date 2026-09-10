@@ -1,0 +1,69 @@
+[package]
+name = "gst-captions"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+authors = ["Elliott Linder <elliott@linder.dev>"]
+license = "MPL-2.0"
+description = "GStreamer live-caption plugin: speech-to-text, roll-up formatting, and FLV caption muxing"
+repository = "https://github.com/darfink/gst-captions"
+
+[lib]
+name = "gstcaptions"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+default = ["flvmux", "rollup", "transcribe"]
+flvmux = ["dep:gst_base"]
+rollup = ["dep:unicode-width"]
+transcribe = ["dep:gst-audio", "dep:transcribe-cpp", "dep:byte-slice-cast", "dep:earshot", "dep:log"]
+static = []
+capi = []
+doc = ["gst/v1_18"]
+metal = ["transcribe", "transcribe-cpp/metal"]
+cuda = ["transcribe", "transcribe-cpp/cuda"]
+vulkan = ["transcribe", "transcribe-cpp/vulkan"]
+openmp = ["transcribe", "transcribe-cpp/openmp"]
+dynamic-backends = ["transcribe", "transcribe-cpp/dynamic-backends"]
+
+[dependencies]
+gst = { package = "gstreamer", version = "0.25", features = ["v1_20"] }
+gst_base = { package = "gstreamer-base", version = "0.25", features = ["v1_20"], optional = true }
+gst-audio = { package = "gstreamer-audio", version = "0.25", features = ["v1_16"], optional = true }
+transcribe-cpp = { version = "0.1.3", default-features = false, optional = true }
+byte-slice-cast = { version = "1.2", optional = true }
+earshot = { version = "1.2", optional = true }
+log = { version = "0.4", optional = true }
+unicode-width = { version = "0.2", optional = true }
+
+[dev-dependencies]
+gst-check = { package = "gstreamer-check", version = "0.25" }
+gst_app = { version = "0.25", package = "gstreamer-app" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+gst-plugin-version-helper = "0.8.4"
+
+[package.metadata.capi]
+min_version = "0.9.21"
+
+[package.metadata.capi.header]
+enabled = false
+
+[package.metadata.capi.library]
+install_subdir = "gstreamer-1.0"
+versioning = false
+import_library = false
+
+[package.metadata.capi.pkg_config]
+requires_private = "gstreamer-1.0, gstreamer-base-1.0, gstreamer-audio-1.0, gobject-2.0, glib-2.0, gmodule-2.0"
+
+[[example]]
+name = "transcribe"
+required-features = ["transcribe"]
+
+[[example]]
+name = "vadscore"
+required-features = ["transcribe"]

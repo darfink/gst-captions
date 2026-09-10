@@ -1,9 +1,3 @@
 [workspace]
 resolver = "3"
-members = [
-    "flvsubmux",
-    "textrollup",
-    "transcribe-cpp",
-    "scuffle-rtmp",
-]
-exclude = ["scuffle-rtmp/vendor/scuffle-rtmp"]
+members = ["gst-captions"]

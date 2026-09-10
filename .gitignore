@@ -5,7 +5,7 @@
 *.dll
 
 # Local development material
-textrollup/scratchpad/
+gst-captions/scratchpad/
 
 # Editor and operating-system files
 .DS_Store
