@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.suffix }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # CPU-only so the library loads anywhere without GPU toolchains.
+          - os: ubuntu-26.04
+            features: ''
+            ext: so
+            suffix: linux-x86_64
+          # Metal needs no extra toolchain and is the primary macOS backend.
+          - os: macos-14
+            features: --features metal
+            ext: dylib
+            suffix: macos-arm64
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+            gstreamer1.0-tools
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake gstreamer
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.suffix }}
+      - name: Tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION=$(grep '^version =' gst-captions/Cargo.toml | head -1 | cut -d'"' -f2)
+          test "v$VERSION" = "$GITHUB_REF_NAME"
+      - run: cargo build --release --locked ${{ matrix.features }}
+      - name: Verify plugins register
+        env:
+          GST_PLUGIN_PATH: ${{ github.workspace }}/target/release
+        run: |
+          gst-inspect-1.0 captionsflvmux
+          gst-inspect-1.0 captionsrollup
+          gst-inspect-1.0 captionstranscriber
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          VERSION=$(grep '^version =' gst-captions/Cargo.toml | head -1 | cut -d'"' -f2)
+          cp "target/release/libgstcaptions.${{ matrix.ext }}" \
+            "dist/libgstcaptions-$VERSION-${{ matrix.suffix }}.${{ matrix.ext }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libgstcaptions-${{ matrix.suffix }}
+          path: dist/
+
+  release:
+    name: github release
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

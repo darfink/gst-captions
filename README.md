@@ -99,6 +99,10 @@ cd gst-captions
 cargo build --release
 ```
 
+Prefer not to build? Each [release](https://github.com/darfink/gst-captions/releases)
+ships prebuilt libraries for Linux (CPU-only) and macOS (Metal); use one
+wherever steps 2–3 reference the file you built.
+
 1. Try it straight from the build tree:
 
 ```sh
