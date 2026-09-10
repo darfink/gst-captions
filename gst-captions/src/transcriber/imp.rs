@@ -52,8 +52,8 @@ use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 use transcribe_cpp::{
-  ModelOptions, MoonshineStreamingOptions, ParakeetBufferedStreamOptions, ParakeetStreamOptions,
-  RunExtension, RunOptions, SessionOptions, StreamExtension, StreamOptions,
+  Diarize, ModelOptions, MoonshineStreamingOptions, ParakeetBufferedStreamOptions,
+  ParakeetStreamOptions, RunExtension, RunOptions, SessionOptions, StreamExtension, StreamOptions,
   VoxtralRealtimeStreamOptions, WhisperRunOptions,
 };
 
@@ -164,11 +164,30 @@ impl Default for Settings {
 }
 
 impl Settings {
-  fn model_options(&self) -> ModelOptions {
-    ModelOptions {
+  fn model_options(&self) -> Result<ModelOptions, String> {
+    // 0 selects the backend's automatic policy, which prefers discrete GPUs.
+    // Anything else is a registry index into the enumerated devices.
+    let device = if self.gpu_device == 0 {
+      None
+    } else {
+      let index = self.gpu_device as usize;
+      match transcribe_cpp::devices()
+        .into_iter()
+        .find(|device| device.index == Some(index))
+      {
+        Some(device) => Some(device),
+        None => {
+          return Err(format!(
+            "gpu-device {} is not a registered compute device",
+            self.gpu_device
+          ));
+        }
+      }
+    };
+    Ok(ModelOptions {
       backend: self.backend.into(),
-      gpu_device: self.gpu_device,
-    }
+      device,
+    })
   }
 
   fn session_options(&self) -> SessionOptions {
@@ -185,6 +204,7 @@ impl Settings {
       timestamps: self.timestamps.into(),
       pnc: self.pnc.into(),
       itn: self.itn.into(),
+      diarize: Diarize::Default,
       language: self.language.clone(),
       target_language: self.target_language.clone(),
       keep_special_tags: self.keep_special_tags,
@@ -1245,13 +1265,16 @@ impl CaptionsTranscriber {
     let run_options = settings
       .run_options()
       .map_err(|err| gst::error_msg!(gst::CoreError::Failed, ["{err}"]))?;
+    let model_options = settings
+      .model_options()
+      .map_err(|err| gst::error_msg!(gst::CoreError::Failed, ["{err}"]))?;
     let stream_options = settings
       .stream_options()
       .map_err(|err| gst::error_msg!(gst::CoreError::Failed, ["{err}"]))?;
 
     let config = worker::Config {
       model_path,
-      model_options: settings.model_options(),
+      model_options,
       session_options: settings.session_options(),
       run_options,
       stream_options,

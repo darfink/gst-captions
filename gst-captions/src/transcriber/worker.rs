@@ -769,9 +769,11 @@ mod tests {
         .map(|(t, _, _)| *t)
         .collect::<Vec<_>>()
         .join(" "),
+      raw_text: String::new(),
       language: None,
       timestamp_kind: TimestampKind::Word,
       segments: Vec::new(),
+      speaker_segments: Vec::new(),
       words: words
         .iter()
         .map(|(text, t0_ms, t1_ms)| Word {
