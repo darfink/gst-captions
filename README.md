@@ -67,24 +67,30 @@ cd gst-captions
 cargo build --release
 ```
 
-This uses GST_PLUGIN_PATH, so no install or root access is needed.
+1. Try it straight from the build tree — no install or root access needed:
 
 ```sh
 export GST_PLUGIN_PATH="$PWD/target/release"
 gst-inspect-1.0 captionstranscriber captionsrollup captionsflvmux
 ```
 
-For a permanent install, prefer the user-local plugin directory (no root
-needed) over a system-wide install:
+2. Install for your user only (no root needed):
 
 ```sh
-# Just for your user (no root needed):
-install -m 0755 target/release/libgstcaptions.so ~/.local/share/gstreamer-1.0/plugins/
-# Or system-wide (needs root):
-sudo install -m 0755 target/release/libgstcaptions.so "$(pkg-config --variable=pluginsdir gstreamer-1.0)/"
+mkdir -p ~/.local/share/gstreamer-1.0/plugins
+install -m 0755 $(ls target/release/libgstcaptions.{so,dylib} 2>/dev/null) ~/.local/share/gstreamer-1.0/plugins/
 ```
 
-(On macOS the file is `libgstcaptions.dylib`.)
+3. Or system-wide (needs root):
+
+```sh
+sudo install -m 0755 $(ls target/release/libgstcaptions.{so,dylib} 2>/dev/null) "$(pkg-config --variable=pluginsdir gstreamer-1.0)/"
+```
+
+The `ls` picks whichever library the platform built (`.so` on Linux,
+`.dylib` on macOS), so the same commands paste on both. Prefer 1 for a
+quick try and 2 for regular use; 3 is only for when every user on the
+machine needs the plugin.
 
 On macOS with the GStreamer framework build, point pkg-config at it first:
 
@@ -134,22 +140,6 @@ elements:
 docker build -t gst-captions .
 docker run --rm gst-captions
 ```
-
-## Migrating from the old plugins
-
-Version 0.1.0 merges the former `gst-flvsubmux`, `gst-textrollup`, and
-`gst-transcribe-cpp` crates into this one plugin. The old element names are
-gone; rename them:
-
-| Before | After |
-| --- | --- |
-| `flvsubmux` | `captionsflvmux` |
-| `textrollup` | `captionsrollup` |
-| `transcribecpptranscriber` | `captionstranscriber` |
-
-Debug categories moved with them (`captionsflvmux`, `captionsrollup`,
-`captionstranscriber`, plus `captionslib` for transcribe.cpp's own log
-output). Properties are otherwise unchanged.
 
 ## License
 

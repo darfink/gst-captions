@@ -265,18 +265,6 @@ position.
 | `openmp` | off | CPU threading backend, forwarded to `transcribe-cpp` |
 | `dynamic-backends` | off | Runtime backend loading, forwarded to `transcribe-cpp` |
 
-### Migrating from the old plugins
-
-| Before (crate / element) | After |
-| --- | --- |
-| `gst-flvsubmux` / `flvsubmux` | `captionsflvmux` |
-| `gst-textrollup` / `textrollup` | `captionsrollup` |
-| `gst-transcribe-cpp` / `transcribecpptranscriber` | `captionstranscriber` |
-
-Properties are unchanged. GType names gained the `GstCaptions` prefix
-(`GstCaptionsFlvMux`, `GstCaptionsRollup`, `GstCaptionsTranscriber`, plus
-`GstCaptionsMode` and friends).
-
 ### Layout
 
 - `src/flvmux/`: strict FLV subtitle aggregation (AMF0 framing, caption timeline, FLV tags).
@@ -313,7 +301,7 @@ carries transcribe.cpp's own log output, where decoder-level detail lives.
 From the repository root:
 
 ```sh
-cargo build
-export GST_PLUGIN_PATH="$PWD/target/debug"
+cargo build --release
+export GST_PLUGIN_PATH="$PWD/target/release"
 gst-inspect-1.0 captionsflvmux captionsrollup captionstranscriber
 ```
