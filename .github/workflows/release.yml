@@ -66,7 +66,7 @@ jobs:
           VERSION=$(grep '^version =' gst-captions/Cargo.toml | head -1 | cut -d'"' -f2)
           cp "target/release/libgstcaptions.${{ matrix.ext }}" \
             "dist/libgstcaptions-$VERSION-${{ matrix.suffix }}.${{ matrix.ext }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: libgstcaptions-${{ matrix.suffix }}
           path: dist/
@@ -79,7 +79,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
