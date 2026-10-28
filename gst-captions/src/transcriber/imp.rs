@@ -341,6 +341,18 @@ impl State {
     // until the new stream passed the old one's end.
     self.committed_ms = 0;
   }
+
+  /// Rebase for a new model stream without rewinding published coverage.
+  ///
+  /// Downstream has already consumed text and GAPs up to `out_pts`, and a
+  /// strict sparse-stream aggregator rejects anything that starts earlier.
+  /// After a backward discontinuity or a new segment the next audio can
+  /// start before that point, so keep it; only a flush rewinds it.
+  fn rebase_timeline(&mut self) {
+    let published = self.out_pts;
+    self.reset_timeline();
+    self.out_pts = published;
+  }
 }
 
 pub struct CaptionsTranscriber {
@@ -873,7 +885,12 @@ impl CaptionsTranscriber {
     gst::debug!(CAT, imp = self, "restarting stream");
     self.send_cmd(Cmd::Restart)?;
     self.drain_events(Some(Marker::Restarted), discard)?;
-    self.state.lock().unwrap().reset_timeline();
+    let mut state = self.state.lock().unwrap();
+    if discard {
+      state.reset_timeline();
+    } else {
+      state.rebase_timeline();
+    }
     Ok(())
   }
 
@@ -1974,6 +1991,25 @@ mod tests {
       forward_discontinuity_gap(drained, next),
       Some((drained, gst::ClockTime::from_nseconds(40_937_500)))
     );
+  }
+
+  #[test]
+  fn a_restart_keeps_published_coverage_and_a_flush_rewinds_it() {
+    let mut state = State {
+      base_pts: Some(ms(1_000)),
+      out_pts: Some(ms(526_070)),
+      committed_ms: 525_000,
+      ..Default::default()
+    };
+    state.rebase_timeline();
+    assert_eq!(
+      (state.base_pts, state.out_pts, state.committed_ms),
+      (None, Some(ms(526_070)), 0)
+    );
+    // Speech after a backward discontinuity cannot start inside it.
+    assert_eq!(gate_opening_gap(state.out_pts, ms(526_031)), None);
+    state.reset_timeline();
+    assert_eq!(state.out_pts, None);
   }
 
   #[test]
