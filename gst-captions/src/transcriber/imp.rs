@@ -104,6 +104,8 @@ struct Settings {
   vad: bool,
   /// Score a frame must reach to count as voice.
   vad_threshold: f32,
+  /// Silero VAD model for the gate; earshot when unset.
+  vad_model_path: Option<String>,
   /// Zero-filled priming chunk fed before the first speech. Zero disables it.
   warmup_pad_ms: u32,
 
@@ -142,6 +144,7 @@ impl Default for Settings {
       discont_threshold_ms: DEFAULT_DISCONT_THRESHOLD_MS,
       vad: DEFAULT_VAD,
       vad_threshold: vad::DEFAULT_THRESHOLD,
+      vad_model_path: None,
       warmup_pad_ms: DEFAULT_WARMUP_PAD_MS,
       backend: Backend::default(),
       gpu_device: 0,
@@ -412,7 +415,7 @@ impl CaptionsTranscriber {
 
     loop {
       match events.recv() {
-        Ok(Ev::Ready(info)) => {
+        Ok(Ev::Ready { info, vad: silero }) => {
           let info = *info;
           gst::info!(
             CAT,
@@ -438,9 +441,19 @@ impl CaptionsTranscriber {
               (settings.vad, settings.vad_threshold, settings.warmup_pad_ms)
             };
             state.gate = (info.streaming && vad).then(|| {
-              let mut gate = vad::Gate::new(info.native_sample_rate.max(1) as u64);
+              let rate = info.native_sample_rate.max(1) as u64;
+              let mut gate = match silero {
+                Some(silero) => vad::Gate::with_silero(rate, silero.session, silero.frame_samples),
+                None => vad::Gate::new(rate),
+              };
               gate.set_threshold(threshold);
               gate.set_warmup_pad_ms(warmup_pad_ms as u64);
+              gst::info!(
+                CAT,
+                imp = self,
+                "voice activity gate uses {}",
+                gate.detector_name()
+              );
               gate
             });
             state.info = Some(info.clone());
@@ -805,7 +818,7 @@ impl CaptionsTranscriber {
         } => self.report_compute(compute_ms, audio_ms),
         Ev::Drained if until == Some(Marker::Drained) => return Ok(()),
         Ev::Restarted if until == Some(Marker::Restarted) => return Ok(()),
-        Ev::Drained | Ev::Restarted | Ev::Ready(_) => (),
+        Ev::Drained | Ev::Restarted | Ev::Ready { .. } => (),
         Ev::Error(err) => {
           gst::element_imp_error!(self, gst::StreamError::Failed, ["{err}"]);
           return Err(gst::FlowError::Error);
@@ -1300,6 +1313,10 @@ impl CaptionsTranscriber {
       mode: settings.mode,
       chunk_ms: settings.chunk_duration_ms as i64,
       live_edge_offset_ms: settings.live_edge_offset_ms as i64,
+      vad_model_path: settings
+        .vad
+        .then(|| settings.vad_model_path.clone())
+        .flatten(),
     };
 
     gst::debug!(CAT, imp = self, "preparing with {config:?}");
@@ -1648,6 +1665,14 @@ impl ObjectImpl for CaptionsTranscriber {
           .maximum(1.0)
           .default_value(vad::DEFAULT_THRESHOLD)
           .build(),
+        glib::ParamSpecString::builder("vad-model-path")
+          .nick("VAD Model Path")
+          .blurb(
+            "Silero VAD GGUF for the gate (transcribe.cpp's silero-vad-v6.2). \
+                         Unset uses the built-in earshot detector. Silero does not \
+                         mistake intro music for speech",
+          )
+          .build(),
         glib::ParamSpecUInt::builder("warmup-pad")
           .nick("Warmup Pad")
           .blurb(
@@ -1796,6 +1821,7 @@ impl ObjectImpl for CaptionsTranscriber {
       "discont-threshold" => settings.discont_threshold_ms = value.get().unwrap(),
       "vad" => settings.vad = value.get().unwrap(),
       "vad-threshold" => settings.vad_threshold = value.get().unwrap(),
+      "vad-model-path" => settings.vad_model_path = value.get().unwrap(),
       "warmup-pad" => settings.warmup_pad_ms = value.get().unwrap(),
       "backend" => settings.backend = value.get().unwrap(),
       "gpu-device" => settings.gpu_device = value.get().unwrap(),
@@ -1846,6 +1872,13 @@ impl ObjectImpl for CaptionsTranscriber {
             .field("supports-translate", info.supports_translate)
             .field("streaming", info.streaming)
             .field("languages", info.languages.join(",").as_str())
+            .field(
+              "vad",
+              state
+                .gate
+                .as_ref()
+                .map_or("none", |gate| gate.detector_name()),
+            )
             .build()
         })
         .to_value();
@@ -1864,6 +1897,7 @@ impl ObjectImpl for CaptionsTranscriber {
       "discont-threshold" => settings.discont_threshold_ms.to_value(),
       "vad" => settings.vad.to_value(),
       "vad-threshold" => settings.vad_threshold.to_value(),
+      "vad-model-path" => settings.vad_model_path.to_value(),
       "warmup-pad" => settings.warmup_pad_ms.to_value(),
       "backend" => settings.backend.to_value(),
       "gpu-device" => settings.gpu_device.to_value(),

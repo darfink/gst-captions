@@ -47,6 +47,7 @@ Timing. The first three add up to the latency reported downstream:
 | `discont‑threshold` | uint (ms) | `500` | A timeline jump larger than this finalizes the current stream and starts a new one |
 | `vad` | boolean | `true` | `mode=stream`: discard audio until speech is detected, so the model never opens its stream on silence |
 | `vad‑threshold` | float | `0.6` | Score from 0 to 1 a frame must reach to count as speech. Higher is stricter |
+| `vad‑model‑path` | string | (none) | Silero VAD GGUF ([`silero-vad-v6.2`](https://huggingface.co/handy-computer/silero-vad-v6.2-gguf)) for the gate. Unset uses the built-in earshot detector, which opens on intro music. See [VAD gate](#vad-gate) |
 | `warmup‑pad` | uint (ms) | `80` | `mode=stream`: milliseconds of digital silence fed as a priming chunk before the first speech. `0` disables it |
 
 Text and language:
@@ -94,6 +95,28 @@ live edge is withheld and retried on the next run until it completes. In
 short priming silence is fed first, because several streaming checkpoints
 poison their state when opened on silence; set `vad=false` rather than
 working around a detector that misreads a source.
+
+#### VAD gate
+
+In `stream` mode the element discards audio until a voice activity detector
+hears speech, then lets everything through. The built-in detector is
+[earshot](https://crates.io/crates/earshot), which needs no model file.
+`vad-model-path` switches to transcribe.cpp's Silero VAD, loaded as a
+separate model with one thread (well under 1% of a core).
+
+The two agree on silence, room tone, hum, broadband noise and typing. Music is
+where they differ: on 20 speech onsets after an 8 s tonal intro, earshot
+opened on the music every time and Silero never did, even across 180 s
+intros. A Nemotron stream fed the intro loses more of what follows as the
+intro grows. With `nemotron-speech-streaming-en-0.6b`, word recall on the
+first 2 s of speech went from 57% to 66% with Silero after a 180 s intro,
+and from 66% to 70% after 60 s. Short intros barely separate them.
+
+`model-info` reports the detector in use as `vad` (`earshot`, `silero`, or
+`none` when the gate is off). A file that is not a VAD model, or one whose
+sample rate differs from the transcription model's, fails the element at
+startup. A Silero call that fails mid-stream opens the gate rather than
+withholding the rest of the stream.
 
 #### Modes
 

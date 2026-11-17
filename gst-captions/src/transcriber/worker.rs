@@ -20,7 +20,7 @@ use gst::glib;
 use gst::prelude::*;
 use transcribe_cpp::{
   CancelToken, Error, Model, ModelOptions, RunOptions, Session, SessionOptions, StreamOptions,
-  Transcript,
+  Transcript, VadSession, VadSessionOptions,
 };
 
 use super::Mode;
@@ -42,6 +42,16 @@ pub struct Config {
   pub chunk_ms: i64,
   /// Chunked mode: trailing audio whose words are withheld as unstable.
   pub live_edge_offset_ms: i64,
+  /// Silero VAD model for the head-of-stream gate. `None` keeps earshot, and
+  /// the element leaves it unset when the gate is disabled.
+  pub vad_model_path: Option<String>,
+}
+
+/// A loaded Silero VAD session, handed to the element's gate.
+pub struct SileroVad {
+  pub session: VadSession,
+  /// Samples per probability (512, or 32ms at 16 kHz).
+  pub frame_samples: usize,
 }
 
 /// What the element learned about the model once it was loaded.
@@ -73,7 +83,12 @@ pub enum Cmd {
 }
 
 pub enum Ev {
-  Ready(Box<ModelInfo>),
+  /// The model is loaded. `vad` is set when a Silero model was requested
+  /// and the element is streaming, the only mode the gate runs in.
+  Ready {
+    info: Box<ModelInfo>,
+    vad: Option<SileroVad>,
+  },
   /// Newly committed words, in stream-relative milliseconds.
   Words {
     words: Vec<TimedWord>,
@@ -262,9 +277,20 @@ fn run(
     DEFAULT_MAX_WINDOW_MS
   };
 
+  let vad = match config.vad_model_path.as_deref() {
+    Some(path) if streaming => Some(load_vad(path, info.native_sample_rate)?),
+    _ => None,
+  };
+
   post_progress(element, gst::ProgressType::Complete, "loaded model");
 
-  if ev_tx.send(Ev::Ready(Box::new(info))).is_err() {
+  if ev_tx
+    .send(Ev::Ready {
+      info: Box::new(info),
+      vad,
+    })
+    .is_err()
+  {
     return Ok(());
   }
 
@@ -278,6 +304,31 @@ fn run(
   } else {
     run_chunked(&mut session, &config, rate, max_window_ms, cmd_rx, ev_tx)
   }
+}
+
+/// Load a Silero VAD model and open a streaming session on it.
+///
+/// It gets a model of its own, so it never contends for the ASR model's
+/// compute lock, and one thread: a frame costs well under a millisecond.
+fn load_vad(path: &str, asr_rate: i32) -> Result<SileroVad, String> {
+  let model = Model::load_with(path, &ModelOptions::default())
+    .map_err(|err| format!("failed to load VAD model {path}: {err}"))?;
+  let vad = model
+    .vad_info()
+    .map_err(|err| format!("{path} is not a voice activity detection model: {err}"))?;
+  if vad.sample_rate != asr_rate {
+    return Err(format!(
+      "VAD model {path} runs at {} Hz but the transcription model at {asr_rate} Hz",
+      vad.sample_rate
+    ));
+  }
+  let session = model
+    .vad_session_with(&VadSessionOptions { n_threads: 1 })
+    .map_err(|err| format!("failed to open VAD session on {path}: {err}"))?;
+  Ok(SileroVad {
+    session,
+    frame_samples: vad.frame_samples.max(1) as usize,
+  })
 }
 
 /// Report what one native call cost against the audio it consumed.
