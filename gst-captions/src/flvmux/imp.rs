@@ -346,12 +346,12 @@ impl CaptionsFlvMux {
     };
 
     let running_time = self.running_time(&self.flv_sink, pts)?;
-    if let Some(previous) = state.last_media_running_time {
-      if running_time < previous {
-        return Err(self.protocol_error(format_args!(
-          "FLV timestamps are not monotonic: {running_time} follows {previous}"
-        )));
-      }
+    if let Some(previous) = state.last_media_running_time
+      && running_time < previous
+    {
+      return Err(self.protocol_error(format_args!(
+        "FLV timestamps are not monotonic: {running_time} follows {previous}"
+      )));
     }
     self.require_text_coverage(state, running_time)?;
 

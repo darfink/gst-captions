@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, macos-14]
+        os: [ubuntu-26.04, macos-15]
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies (Linux)
@@ -93,7 +93,7 @@ jobs:
 
   test-metal:
     name: test with the Metal backend
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies

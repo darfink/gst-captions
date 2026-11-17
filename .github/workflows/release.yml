@@ -24,7 +24,7 @@ jobs:
             ext: so
             suffix: linux-x86_64
           # Metal needs no extra toolchain and is the primary macOS backend.
-          - os: macos-14
+          - os: macos-15
             features: --features metal
             ext: dylib
             suffix: macos-arm64
