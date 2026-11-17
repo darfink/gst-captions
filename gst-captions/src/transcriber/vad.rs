@@ -155,17 +155,17 @@ impl Detector {
 
   /// Score one frame of exactly [`Detector::frame`] samples.
   ///
-  /// A Silero call that fails counts as speech. Failing open hands the
-  /// model the rest of the stream with no gate; failing closed would
-  /// withhold every word that follows.
-  fn score(&mut self, frame: &[f32]) -> f32 {
+  /// `None` means the detector failed. The gate then opens at once: that
+  /// hands the model the rest of the stream ungated, while failing closed
+  /// would withhold every word that follows.
+  fn score(&mut self, frame: &[f32]) -> Option<f32> {
     match self {
-      Detector::Earshot(detector) => detector.predict_f32(frame),
+      Detector::Earshot(detector) => Some(detector.predict_f32(frame)),
       Detector::Silero { session, .. } => match session.stream_feed(frame) {
-        Ok(result) => result.probs.last().copied().unwrap_or(0.0),
+        Ok(result) => Some(result.probs.last().copied().unwrap_or(0.0)),
         Err(err) => {
           log::warn!("silero vad feed failed, opening the gate: {err}");
-          1.0
+          None
         }
       },
     }
@@ -356,7 +356,11 @@ impl Gate {
 
       let frame = std::mem::take(&mut self.pending);
       self.pending = Vec::with_capacity(self.frame);
-      let score = self.detector.score(&frame);
+      let Some(score) = self.detector.score(&frame) else {
+        self.retain(&frame);
+        let tail = samples[cursor..].to_vec();
+        return self.open_on(&tail);
+      };
 
       if score < self.threshold {
         self.voiced_run = 0;
@@ -789,6 +793,27 @@ mod tests {
       .chunks(320)
       .any(|chunk| matches!(gate.push(chunk), Decision::Open { .. }));
     assert!(opened, "earshot no longer opens on the tonal pad");
+  }
+
+  #[test]
+  fn a_failing_silero_frame_opens_the_gate_at_once() {
+    let Some((mut gate, _)) = silero_gate() else {
+      eprintln!("skip: set GST_CAPTIONS_VAD_MODEL and GST_CAPTIONS_WAV");
+      return;
+    };
+    assert_eq!(gate.push(&silence(1_000)), Decision::Withhold);
+    // Silero rejects NaN input; one bad frame followed by silence must
+    // still open rather than reset the voiced run.
+    let mut poisoned = silence(32);
+    poisoned[0] = f32::NAN;
+    let mut decisions = vec![gate.push(&poisoned)];
+    decisions.push(gate.push(&silence(100)));
+    assert!(
+      decisions
+        .iter()
+        .any(|decision| matches!(decision, Decision::Open { .. })),
+      "a detector error must open the gate: {decisions:?}"
+    );
   }
 
   #[test]
