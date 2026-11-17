@@ -52,9 +52,15 @@ jobs:
             gstreamer1.0-tools
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install cmake gstreamer
+        run: |
+          brew install cmake gstreamer
+          # Homebrew moves GStreamer's keg path between versions, and cached
+          # build-script output links against the old one. Key on it.
+          echo "GST_CACHE_KEY=gst-$(pkg-config --modversion gstreamer-1.0)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.GST_CACHE_KEY }}
       - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
       - name: Verify plugins register
@@ -97,11 +103,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
-        run: brew install cmake gstreamer
+        run: |
+          brew install cmake gstreamer
+          # Homebrew moves GStreamer's keg path between versions, and cached
+          # build-script output links against the old one. Key on it.
+          echo "GST_CACHE_KEY=gst-$(pkg-config --modversion gstreamer-1.0)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: metal
+          key: metal-${{ env.GST_CACHE_KEY }}
       - run: cargo build --workspace --locked --features metal
       - run: cargo test --workspace --locked --features metal
       - name: Verify plugins register

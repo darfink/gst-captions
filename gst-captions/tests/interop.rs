@@ -295,3 +295,87 @@ fn stock_transcriber_feeds_our_rollup() {
     "expected roll-up states from stock transcriber"
   );
 }
+
+#[cfg(feature = "transcribe")]
+fn gated_vad_model() -> Option<String> {
+  let model = std::env::var("GST_CAPTIONS_VAD_MODEL").ok()?;
+  std::path::Path::new(&model).is_file().then_some(model)
+}
+
+/// Run the transcriber over the gated WAV and return its text and model-info.
+#[cfg(feature = "transcribe")]
+fn transcribe_with(
+  model: &str,
+  wav: &str,
+  extra: &str,
+) -> (Vec<String>, Option<gst::Structure>, Option<String>) {
+  init();
+  let launch = format!(
+    "filesrc location={wav} ! wavparse ! audioconvert ! audioresample ! captionstranscriber name=asr model-path={model} {extra} ! appsink name=sink sync=false",
+  );
+  let pipeline = gst::parse::launch(&launch)
+    .unwrap()
+    .downcast::<gst::Pipeline>()
+    .unwrap();
+  let appsink = pipeline
+    .by_name("sink")
+    .unwrap()
+    .downcast::<gst_app::AppSink>()
+    .unwrap();
+  pipeline.set_state(gst::State::Playing).unwrap();
+  let texts = pull_text_samples(&appsink, 120);
+  let info = pipeline
+    .by_name("asr")
+    .unwrap()
+    .property::<Option<gst::Structure>>("model-info");
+  // Every error, with its debug detail: a failing element is often
+  // followed by an upstream "Internal data stream error".
+  let bus = pipeline.bus().unwrap();
+  let mut errors = Vec::new();
+  while let Some(msg) = bus.pop() {
+    if let gst::MessageView::Error(err) = msg.view() {
+      errors.push(format!("{} ({:?})", err.error(), err.debug()));
+    }
+  }
+  pipeline.set_state(gst::State::Null).unwrap();
+  let error = (!errors.is_empty()).then(|| errors.join("; "));
+  (texts, info, error)
+}
+
+#[cfg(feature = "transcribe")]
+#[test]
+fn silero_gate_transcribes_and_reports_itself() {
+  let (Some((model, wav)), Some(vad)) = (gated_model_and_wav(), gated_vad_model()) else {
+    eprintln!("skip: set GST_CAPTIONS_MODEL, GST_CAPTIONS_WAV and GST_CAPTIONS_VAD_MODEL");
+    return;
+  };
+  let (texts, info, error) = transcribe_with(&model, &wav, &format!("vad-model-path={vad}"));
+  assert!(error.is_none(), "pipeline error: {error:?}");
+  assert!(
+    !texts.is_empty(),
+    "expected transcription through the Silero gate"
+  );
+  let info = info.expect("model-info is set once loaded");
+  if info.get::<bool>("streaming").unwrap() {
+    assert_eq!(info.get::<&str>("vad").unwrap(), "silero");
+  }
+}
+
+#[cfg(feature = "transcribe")]
+#[test]
+fn a_transcription_model_is_not_a_vad_model() {
+  let Some((model, wav)) = gated_model_and_wav() else {
+    eprintln!("skip: set GST_CAPTIONS_MODEL and GST_CAPTIONS_WAV");
+    return;
+  };
+  let (texts, _, error) = transcribe_with(&model, &wav, &format!("vad-model-path={model}"));
+  assert!(
+    texts.is_empty(),
+    "nothing should be transcribed without a usable gate"
+  );
+  let error = error.expect("a non-VAD model must fail the pipeline");
+  assert!(
+    error.contains("voice activity detection") || error.contains("VAD"),
+    "unexpected error: {error}"
+  );
+}

@@ -11,9 +11,18 @@
 //! digital silence loses the opening sentence.
 //!
 //! So the audio the model sees has to *start* on speech. This gate discards
-//! everything until [`earshot`] says a frame is voiced, and everything from
+//! everything until the detector says a frame is voiced, and everything from
 //! that point on flows straight through - the cost is bounded to the head of
 //! the stream rather than being a filter in the hot path forever.
+//!
+//! # Two detectors
+//!
+//! [`earshot`] is built in and needs no model file. transcribe.cpp's Silero
+//! VAD is used instead when a `vad-model-path` is set. They agree on silence,
+//! room tone, hum, broadband noise and typing, but intro music separates
+//! them: across 20 speech onsets after 8s of tonal music, earshot opened on
+//! the music every time and Silero never did. A stream opened on music feeds
+//! the model seconds of it before anyone speaks.
 //!
 //! # Discarded, not buffered
 //!
@@ -42,10 +51,8 @@
 //! the gate exists to keep out, which is worse than waiting. If the detector
 //! is wrong for a given source, turn the gate off rather than time it out.
 
-use earshot::Detector;
-
 /// earshot consumes exactly this many samples per call, at 16 kHz.
-const FRAME: usize = 256;
+const EARSHOT_FRAME: usize = 256;
 
 /// Score above which a frame counts as voice.
 ///
@@ -61,10 +68,11 @@ const FRAME: usize = 256;
 /// four seconds early on one of them.
 pub const DEFAULT_THRESHOLD: f32 = 0.6;
 
-/// Consecutive voiced frames required to open. One frame is 16ms, so this is
-/// ~48ms of speech: long enough to reject a click or a codec artifact, short
-/// enough to sit inside the onset of the first word.
-const DEFAULT_HANGOVER_FRAMES: u32 = 3;
+/// Consecutive voiced audio required to open: long enough to reject a click
+/// or a codec artifact, short enough to sit inside the onset of the first
+/// word. Rounded up to whole frames, so three 16ms earshot frames or two 32ms
+/// Silero frames.
+const HANGOVER_MS: u64 = 48;
 
 /// How much audio to keep behind the frame that opens the gate.
 ///
@@ -128,9 +136,59 @@ pub enum Decision {
   Passthrough,
 }
 
+/// Scores fixed-size frames of 16 kHz mono audio for voice activity.
+enum Detector {
+  Earshot(Box<earshot::Detector>),
+  Silero {
+    session: transcribe_cpp::VadSession,
+    frame: usize,
+  },
+}
+
+impl Detector {
+  fn frame(&self) -> usize {
+    match self {
+      Detector::Earshot(_) => EARSHOT_FRAME,
+      Detector::Silero { frame, .. } => *frame,
+    }
+  }
+
+  /// Score one frame of exactly [`Detector::frame`] samples.
+  ///
+  /// `None` means the detector failed. The gate then opens at once: that
+  /// hands the model the rest of the stream ungated, while failing closed
+  /// would withhold every word that follows.
+  fn score(&mut self, frame: &[f32]) -> Option<f32> {
+    match self {
+      Detector::Earshot(detector) => Some(detector.predict_f32(frame)),
+      Detector::Silero { session, .. } => match session.stream_feed(frame) {
+        Ok(result) => Some(result.probs.last().copied().unwrap_or(0.0)),
+        Err(err) => {
+          log::warn!("silero vad feed failed, opening the gate: {err}");
+          None
+        }
+      },
+    }
+  }
+
+  fn reset(&mut self) {
+    match self {
+      Detector::Earshot(detector) => detector.reset(),
+      Detector::Silero { session, .. } => session.stream_reset(),
+    }
+  }
+
+  fn name(&self) -> &'static str {
+    match self {
+      Detector::Earshot(_) => "earshot",
+      Detector::Silero { .. } => "silero",
+    }
+  }
+}
+
 /// Withholds audio until speech starts, then gets out of the way.
 pub struct Gate {
-  detector: Box<Detector>,
+  detector: Detector,
   /// The most recent [`PREROLL_MS`] of rejected audio, oldest first.
   ///
   /// This is the only audio the gate retains. Everything older has been
@@ -140,6 +198,8 @@ pub struct Gate {
   /// Samples not yet classified, always shorter than one frame. The detector
   /// is frame-locked and buffer boundaries do not line up with frames.
   pending: Vec<f32>,
+  /// Samples per detector frame.
+  frame: usize,
   /// Total samples seen since the gate was armed. The timeline is rebuilt
   /// from this, so it counts discarded audio too.
   seen: u64,
@@ -153,19 +213,47 @@ pub struct Gate {
 }
 
 impl Gate {
+  /// A gate driven by the built-in earshot detector.
   pub fn new(rate: u64) -> Self {
+    Self::with_detector(rate, Detector::Earshot(earshot::Detector::default_boxed()))
+  }
+
+  /// A gate driven by a transcribe.cpp Silero session.
+  ///
+  /// `frame_samples` is the model's frame size (512 for Silero, 32ms at
+  /// 16 kHz), and `rate` must be the VAD model's own sample rate.
+  pub fn with_silero(rate: u64, session: transcribe_cpp::VadSession, frame_samples: usize) -> Self {
+    Self::with_detector(
+      rate,
+      Detector::Silero {
+        session,
+        frame: frame_samples.max(1),
+      },
+    )
+  }
+
+  fn with_detector(rate: u64, detector: Detector) -> Self {
+    let rate = rate.max(1);
+    let frame = detector.frame();
+    let frame_ms = (frame as u64 * 1000).div_ceil(rate).max(1);
     Self {
-      detector: Detector::default_boxed(),
+      detector,
       preroll: std::collections::VecDeque::new(),
-      pending: Vec::with_capacity(FRAME),
+      pending: Vec::with_capacity(frame),
+      frame,
       seen: 0,
       voiced_run: 0,
       open: false,
-      rate: rate.max(1),
+      rate,
       threshold: DEFAULT_THRESHOLD,
-      hangover_frames: DEFAULT_HANGOVER_FRAMES,
+      hangover_frames: HANGOVER_MS.div_ceil(frame_ms).max(1) as u32,
       warmup_pad_ms: WARMUP_PAD_MS,
     }
+  }
+
+  /// Which detector drives the gate, for logs and `model-info`.
+  pub fn detector_name(&self) -> &'static str {
+    self.detector.name()
   }
 
   /// Set the score a frame must reach to count as voice.
@@ -255,20 +343,24 @@ impl Gate {
 
     let mut cursor = 0usize;
     while cursor < samples.len() {
-      let want = FRAME - self.pending.len();
+      let want = self.frame - self.pending.len();
       let take = want.min(samples.len() - cursor);
       self
         .pending
         .extend_from_slice(&samples[cursor..cursor + take]);
       cursor += take;
 
-      if self.pending.len() < FRAME {
+      if self.pending.len() < self.frame {
         break;
       }
 
       let frame = std::mem::take(&mut self.pending);
-      self.pending = Vec::with_capacity(FRAME);
-      let score = self.detector.predict_f32(&frame);
+      self.pending = Vec::with_capacity(self.frame);
+      let Some(score) = self.detector.score(&frame) else {
+        self.retain(&frame);
+        let tail = samples[cursor..].to_vec();
+        return self.open_on(&tail);
+      };
 
       if score < self.threshold {
         self.voiced_run = 0;
@@ -557,5 +649,185 @@ mod tests {
       panic!("expected the gate to open on speech");
     };
     assert!(warmup.is_empty());
+  }
+
+  #[test]
+  fn earshot_needs_three_frames_of_voice() {
+    assert_eq!(Gate::new(RATE).hangover_frames, 3);
+  }
+
+  /// Silero gates need transcribe.cpp's silero-vad GGUF and a real speech
+  /// recording, so they run only when both are supplied.
+  fn silero_gate() -> Option<(Gate, Vec<f32>)> {
+    let model = std::env::var("GST_CAPTIONS_VAD_MODEL").ok()?;
+    let wav = std::env::var("GST_CAPTIONS_WAV").ok()?;
+    let model = transcribe_cpp::Model::load(&model).expect("failed to load the VAD model");
+    let info = model.vad_info().expect("not a VAD model");
+    assert_eq!(info.sample_rate as u64, RATE);
+    let session = model
+      .vad_session_with(&transcribe_cpp::VadSessionOptions { n_threads: 1 })
+      .expect("failed to open a VAD session");
+    let gate = Gate::with_silero(RATE, session, info.frame_samples as usize);
+    Some((gate, read_wav(&wav)))
+  }
+
+  /// 16-bit mono PCM at [`RATE`], from a RIFF file.
+  fn read_wav(path: &str) -> Vec<f32> {
+    let bytes = std::fs::read(path).expect("failed to read the speech recording");
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+      let id = &bytes[at..at + 4];
+      let len = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+      if id == b"fmt " {
+        let channels = u16::from_le_bytes(bytes[at + 10..at + 12].try_into().unwrap());
+        let rate = u32::from_le_bytes(bytes[at + 12..at + 16].try_into().unwrap());
+        assert_eq!((channels, rate as u64), (1, RATE), "expected 16 kHz mono");
+      }
+      if id == b"data" {
+        let data = &bytes[at + 8..(at + 8 + len).min(bytes.len())];
+        return data
+          .as_chunks::<2>()
+          .0
+          .iter()
+          .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
+          .collect();
+      }
+      at += 8 + len + (len & 1);
+    }
+    panic!("{path} has no data chunk");
+  }
+
+  /// A tonal pad: three harmonic notes per chord, chords changing every
+  /// ~600ms. Harmonic structure is what earshot mistakes for a voice.
+  fn music(ms: u64) -> Vec<f32> {
+    let n = (RATE * ms / 1000) as usize;
+    let chord_len = (RATE * 600 / 1000) as usize;
+    let roots = [220.0f32, 261.6, 196.0, 293.7];
+    (0..n)
+      .map(|i| {
+        let chord = i / chord_len;
+        let k = i % chord_len;
+        let env = (k as f32 / 400.0).min(1.0) * ((chord_len - k) as f32 / 400.0).min(1.0);
+        let root = roots[chord % roots.len()];
+        let t = i as f32 / RATE as f32;
+        let sum: f32 = [1.0f32, 1.26, 1.5]
+          .iter()
+          .flat_map(|ratio| {
+            (1..=3).map(move |h| {
+              (2.0 * std::f32::consts::PI * root * ratio * h as f32 * t).sin() / h as f32
+            })
+          })
+          .sum();
+        0.03 * env * sum
+      })
+      .collect()
+  }
+
+  #[test]
+  fn silero_needs_two_frames_of_voice() {
+    let Some((gate, _)) = silero_gate() else {
+      eprintln!("skip: set GST_CAPTIONS_VAD_MODEL and GST_CAPTIONS_WAV");
+      return;
+    };
+    assert_eq!(gate.detector_name(), "silero");
+    assert_eq!(gate.hangover_frames, 2);
+  }
+
+  #[test]
+  fn silero_withholds_silence_and_room_tone() {
+    let Some((mut gate, _)) = silero_gate() else {
+      eprintln!("skip: set GST_CAPTIONS_VAD_MODEL and GST_CAPTIONS_WAV");
+      return;
+    };
+    assert_eq!(gate.push(&silence(3_000)), Decision::Withhold);
+    for _ in 0..30 {
+      assert_eq!(gate.push(&room_tone(100)), Decision::Withhold);
+    }
+    assert!(!gate.is_open());
+  }
+
+  #[test]
+  fn silero_withholds_music_then_opens_on_speech() {
+    let Some((mut gate, speech)) = silero_gate() else {
+      eprintln!("skip: set GST_CAPTIONS_VAD_MODEL and GST_CAPTIONS_WAV");
+      return;
+    };
+    let lead = music(8_000);
+    for chunk in lead.chunks(320) {
+      assert_eq!(gate.push(chunk), Decision::Withhold, "opened on music");
+    }
+
+    let mut opened = None;
+    for chunk in speech.chunks(320) {
+      if let Decision::Open {
+        skipped_samples, ..
+      } = gate.push(chunk)
+      {
+        opened = Some(skipped_samples);
+        break;
+      }
+    }
+    let skipped = opened.expect("never opened on speech");
+    // The recording starts speaking within its first second, and the
+    // preroll reaches back at most PREROLL_MS before the deciding frame.
+    let lead_samples = lead.len() as u64;
+    let preroll = RATE * PREROLL_MS / 1000;
+    assert!(
+      skipped + preroll >= lead_samples,
+      "opened {}ms into the music",
+      skipped * 1000 / RATE
+    );
+    assert!(
+      skipped <= lead_samples + RATE,
+      "opened {}ms after the speech began",
+      (skipped - lead_samples) * 1000 / RATE
+    );
+  }
+
+  #[test]
+  fn earshot_mistakes_the_music_for_speech() {
+    // Documents why Silero exists here. If earshot ever stops opening on
+    // this signal the test is stale, not broken.
+    let mut gate = Gate::new(RATE);
+    let opened = music(8_000)
+      .chunks(320)
+      .any(|chunk| matches!(gate.push(chunk), Decision::Open { .. }));
+    assert!(opened, "earshot no longer opens on the tonal pad");
+  }
+
+  #[test]
+  fn a_failing_silero_frame_opens_the_gate_at_once() {
+    let Some((mut gate, _)) = silero_gate() else {
+      eprintln!("skip: set GST_CAPTIONS_VAD_MODEL and GST_CAPTIONS_WAV");
+      return;
+    };
+    assert_eq!(gate.push(&silence(1_000)), Decision::Withhold);
+    // Silero rejects NaN input; one bad frame followed by silence must
+    // still open rather than reset the voiced run.
+    let mut poisoned = silence(32);
+    poisoned[0] = f32::NAN;
+    let mut decisions = vec![gate.push(&poisoned)];
+    decisions.push(gate.push(&silence(100)));
+    assert!(
+      decisions
+        .iter()
+        .any(|decision| matches!(decision, Decision::Open { .. })),
+      "a detector error must open the gate: {decisions:?}"
+    );
+  }
+
+  #[test]
+  fn a_reset_silero_gate_is_cold_again() {
+    let Some((mut gate, speech)) = silero_gate() else {
+      eprintln!("skip: set GST_CAPTIONS_VAD_MODEL and GST_CAPTIONS_WAV");
+      return;
+    };
+    let opened = speech
+      .chunks(320)
+      .any(|chunk| matches!(gate.push(chunk), Decision::Open { .. }));
+    assert!(opened);
+    gate.reset();
+    assert!(!gate.is_open());
+    assert_eq!(gate.push(&silence(2_000)), Decision::Withhold);
   }
 }
