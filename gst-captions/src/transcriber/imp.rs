@@ -1756,18 +1756,18 @@ impl ObjectImpl for CaptionsTranscriber {
   fn signals() -> &'static [glib::subclass::Signal] {
     static SIGNALS: LazyLock<Vec<glib::subclass::Signal>> = LazyLock::new(|| {
       vec![
-          /**
-           * GstCaptionsTranscriber::partial-transcript:
-           * @text: the volatile hypothesis after the committed prefix
-           *
-           * Emitted when the model's tentative text changes. This text is
-           * rewritten freely and is never pushed on the src pad; it is
-           * meant for live UI. Emitted on the streaming thread, so
-           * handlers must not block.
-           */
-          glib::subclass::Signal::builder("partial-transcript")
-              .param_types([String::static_type()])
-              .build(),
+        /**
+         * GstCaptionsTranscriber::partial-transcript:
+         * @text: the volatile hypothesis after the committed prefix
+         *
+         * Emitted when the model's tentative text changes. This text is
+         * rewritten freely and is never pushed on the src pad; it is
+         * meant for live UI. Emitted on the streaming thread, so
+         * handlers must not block.
+         */
+        glib::subclass::Signal::builder("partial-transcript")
+          .param_types([String::static_type()])
+          .build(),
       ]
     });
 
