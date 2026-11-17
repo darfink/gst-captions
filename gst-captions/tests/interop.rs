@@ -178,13 +178,13 @@ fn rollup_replacement_states_reach_flv_script_tags() {
   while let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_seconds(20)) {
     let buffer = sample.buffer().unwrap();
     let map = buffer.map_readable().unwrap();
-    if let Some(header) = parse_tag_header(map.as_slice()) {
-      if header.tag_type == TAG_TYPE_SCRIPT_DATA {
-        script_tags += 1;
-        let bytes = map.as_slice();
-        if bytes.windows(5).any(|w| w == b"hello") || bytes.windows(6).any(|w| w == b"second") {
-          saw_words = true;
-        }
+    if let Some(header) = parse_tag_header(map.as_slice())
+      && header.tag_type == TAG_TYPE_SCRIPT_DATA
+    {
+      script_tags += 1;
+      let bytes = map.as_slice();
+      if bytes.windows(5).any(|w| w == b"hello") || bytes.windows(6).any(|w| w == b"second") {
+        saw_words = true;
       }
     }
   }
@@ -208,10 +208,10 @@ fn pull_text_samples(appsink: &gst_app::AppSink, timeout_secs: u64) -> Vec<Strin
   while let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_seconds(timeout_secs)) {
     let buffer = sample.buffer().unwrap();
     let map = buffer.map_readable().unwrap();
-    if let Ok(text) = std::str::from_utf8(map.as_slice()) {
-      if !text.trim().is_empty() {
-        out.push(text.to_owned());
-      }
+    if let Ok(text) = std::str::from_utf8(map.as_slice())
+      && !text.trim().is_empty()
+    {
+      out.push(text.to_owned());
     }
   }
   out

@@ -187,6 +187,7 @@ impl Settings {
     Ok(ModelOptions {
       backend: self.backend.into(),
       device,
+      ..ModelOptions::default()
     })
   }
 
@@ -215,6 +216,7 @@ impl Settings {
         .map(run_extension)
         .transpose()?
         .flatten(),
+      ..RunOptions::default()
     })
   }
 

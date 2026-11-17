@@ -277,7 +277,7 @@ once. The muxer also accepts sentence-length or accumulated buffers in
 - `src/transcriber/`: streaming/chunked inference driver (commit tracker, VAD gate, worker).
 - `src/logging.rs`: transcribe.cpp log bridge.
 - `tests/`: element harnesses (`flvmux`, `rollup`) and a fixture oracle for the window geometry.
-- `examples/`: `transcribe` (watch commits and partials) and `vadscore` (calibrate the VAD gate).
+- `examples/`: `transcribe` (watch commits and partials), `vadscore` (calibrate the VAD gate), and `vadcompare` (score earshot against transcribe.cpp's Silero VAD on the same audio).
 - `fixtures/`: oracle window data shared with the Python reference in `scratchpad/`.
 
 ### Tests

@@ -18,12 +18,14 @@ fn main() {
 
   let bytes = std::fs::read(&path).expect("failed to read input");
   let samples: Vec<f32> = bytes
-    .chunks_exact(4)
-    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    .as_chunks::<4>()
+    .0
+    .iter()
+    .map(|b| f32::from_le_bytes(*b))
     .collect();
 
   let mut detector = earshot::Detector::default_boxed();
-  for (index, frame) in samples.chunks_exact(256).enumerate() {
+  for (index, frame) in samples.as_chunks::<256>().0.iter().enumerate() {
     let score = detector.predict_f32(frame);
     let peak = frame.iter().fold(0.0f32, |acc, s| acc.max(s.abs()));
     let ms = index * 256 * 1000 / rate;

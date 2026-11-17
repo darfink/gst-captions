@@ -214,7 +214,12 @@ fn run(
   let model = Model::load_with(&config.model_path, &config.model_options)
     .map_err(|err| format!("failed to load model {}: {err}", config.model_path))?;
 
-  let caps = model.capabilities();
+  let caps = model.capabilities().map_err(|err| {
+    format!(
+      "failed to read capabilities of model {}: {err}",
+      config.model_path
+    )
+  })?;
   let streaming = match config.mode {
     Mode::Auto => caps.supports_streaming,
     Mode::Stream => true,

@@ -88,7 +88,7 @@ GST_CAPTIONS_MODEL=model.gguf GST_CAPTIONS_WAV=speech.wav cargo test --release -
 
 ## Build
 
-Requires Rust 1.87+ and GStreamer 1.20 development headers. The transcriber
+Requires Rust 1.92+ and GStreamer 1.20 development headers. The transcriber
 also needs a C++ toolchain and **cmake** (`transcribe-cpp-sys` vendors
 transcribe.cpp and builds it from source; on macOS, `brew install cmake`).
 The first build compiles ggml and takes a while.

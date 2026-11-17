@@ -162,10 +162,10 @@ impl CaptionsRollup {
     out: &mut Vec<Out>,
     pts: gst::ClockTime,
   ) {
-    if let Some(deadline) = state.clear_deadline(settings) {
-      if pts >= deadline {
-        Self::queue_clear(state, out, deadline);
-      }
+    if let Some(deadline) = state.clear_deadline(settings)
+      && pts >= deadline
+    {
+      Self::queue_clear(state, out, deadline);
     }
   }
 
