@@ -28,13 +28,12 @@ ENV PATH=/root/.cargo/bin:${PATH}
 WORKDIR /work
 
 # Dependencies first, so editing the elements does not rebuild the world.
-COPY Cargo.toml Cargo.lock ./
-COPY gst-captions/Cargo.toml gst-captions/build.rs ./gst-captions/
-COPY gst-captions/examples ./gst-captions/examples
-RUN mkdir -p gst-captions/src && echo '' > gst-captions/src/lib.rs && cargo build --release || true
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY examples ./examples
+RUN mkdir -p src && echo '' > src/lib.rs && cargo build --release || true
 
-COPY gst-captions/src ./gst-captions/src
-RUN touch gst-captions/src/lib.rs && cargo build --release --locked
+COPY src ./src
+RUN touch src/lib.rs && cargo build --release --locked
 
 FROM ubuntu:26.04 AS runtime
 

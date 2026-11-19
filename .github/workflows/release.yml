@@ -54,7 +54,7 @@ jobs:
       - name: Tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          VERSION=$(grep '^version =' gst-captions/Cargo.toml | head -1 | cut -d'"' -f2)
+          VERSION=$(grep '^version =' Cargo.toml | head -1 | cut -d'"' -f2)
           test "v$VERSION" = "$GITHUB_REF_NAME"
       - run: cargo build --release --locked ${{ matrix.features }}
       - name: Verify plugins register
@@ -67,7 +67,7 @@ jobs:
       - name: Stage artifact
         run: |
           mkdir -p dist
-          VERSION=$(grep '^version =' gst-captions/Cargo.toml | head -1 | cut -d'"' -f2)
+          VERSION=$(grep '^version =' Cargo.toml | head -1 | cut -d'"' -f2)
           cp "target/release/libgstcaptions.${{ matrix.ext }}" \
             "dist/libgstcaptions-$VERSION-${{ matrix.suffix }}.${{ matrix.ext }}"
       - uses: actions/upload-artifact@v7
