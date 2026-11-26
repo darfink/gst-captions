@@ -19,8 +19,8 @@ use std::sync::mpsc;
 use gst::glib;
 use gst::prelude::*;
 use transcribe_cpp::{
-  CancelToken, Error, Model, ModelOptions, RunOptions, Session, SessionOptions, StreamOptions,
-  Transcript, VadSession, VadSessionOptions,
+  CancelToken, CommitPolicy, Error, Model, ModelOptions, RunOptions, Session, SessionOptions,
+  StreamOptions, Transcript, VadSession, VadSessionOptions,
 };
 
 use super::Mode;
@@ -294,13 +294,19 @@ fn run(
     return Ok(());
   }
 
+  // Families that commit every emitted token get their committed prefix from
+  // the hypothesis itself; see `commit::native_committed`. An explicit
+  // on-finalize policy still means nothing is published early.
+  let native_commit = commit::commits_every_token(&model.arch())
+    && config.stream_options.commit_policy != CommitPolicy::OnFinalize;
+
   let mut session = model
     .session_with(&config.session_options)
     .map_err(|err| format!("failed to open session: {err}"))?;
   session.set_cancel_token(&cancel);
 
   if streaming {
-    run_streaming(&mut session, &config, rate, cmd_rx, ev_tx)
+    run_streaming(&mut session, &config, rate, native_commit, cmd_rx, ev_tx)
   } else {
     run_chunked(&mut session, &config, rate, max_window_ms, cmd_rx, ev_tx)
   }
@@ -351,6 +357,7 @@ fn run_streaming(
   session: &mut Session,
   config: &Config,
   rate: i64,
+  native_commit: bool,
   cmd_rx: &mpsc::Receiver<Cmd>,
   ev_tx: &mpsc::Sender<Ev>,
 ) -> Result<(), String> {
@@ -361,6 +368,8 @@ fn run_streaming(
       .stream(&config.run_options, &config.stream_options)
       .map_err(|err| format!("failed to start stream: {err}"))?;
     let mut tracker = CommitTracker::default();
+    // Committed text published so far when `native_commit` is in effect.
+    let mut published = String::new();
 
     loop {
       let Ok(cmd) = cmd_rx.recv() else {
@@ -390,8 +399,26 @@ fn run_streaming(
           let release_settled =
             !update.committed_changed && tracker.pending_is_settled(update.audio_committed_ms);
 
-          if update.committed_changed || release_settled {
-            let text = stream.text();
+          let mut text = None;
+          let mut native_grew = false;
+          if native_commit && (update.committed_changed || update.result_changed) {
+            let current = stream.text();
+            if let Some(grown) =
+              commit::native_committed(&current.committed, &current.full, &published)
+            {
+              published = grown.to_owned();
+              native_grew = true;
+            }
+            text = Some(current);
+          }
+
+          if update.committed_changed || native_grew || release_settled {
+            let text = text.take().unwrap_or_else(|| stream.text());
+            let committed = if native_commit {
+              published.as_str()
+            } else {
+              text.committed.as_str()
+            };
             let snapshot = stream.snapshot();
             log::debug!(
               "commit at {}ms produced {} segment(s), {} word(s), {} token(s) at \
@@ -403,7 +430,7 @@ fn run_streaming(
               snapshot.timestamp_kind,
             );
             let words = tracker.take_new(
-              &text.committed,
+              committed,
               &commit::units(&snapshot),
               update.audio_committed_ms,
             );
@@ -431,9 +458,22 @@ fn run_streaming(
             return Ok(());
           }
 
-          // Partials are the cheap path: no snapshot, text only.
-          if update.tentative_changed && ev_tx.send(Ev::Partial(stream.text().tentative)).is_err() {
-            return Ok(());
+          // Partials are the cheap path: no snapshot, text only. Under
+          // `native_commit` the library's tentative suffix is measured from
+          // its own (lagging) prefix, so measure from what was published.
+          if update.tentative_changed {
+            let tentative = if native_commit {
+              let full = stream.text().full;
+              full
+                .strip_prefix(published.as_str())
+                .unwrap_or_default()
+                .to_owned()
+            } else {
+              stream.text().tentative
+            };
+            if ev_tx.send(Ev::Partial(tentative)).is_err() {
+              return Ok(());
+            }
           }
         }
         Cmd::Finalize => {
