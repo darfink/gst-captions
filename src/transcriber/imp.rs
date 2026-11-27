@@ -1711,14 +1711,17 @@ impl ObjectImpl for CaptionsTranscriber {
         glib::ParamSpecEnum::builder_with_default("task", Task::default())
           .nick("Task")
           .blurb("Whether to transcribe or translate")
+          .mutable_ready()
           .build(),
         glib::ParamSpecString::builder("language")
           .nick("Language")
           .blurb("Source language hint (ISO code); unset auto-detects")
+          .mutable_ready()
           .build(),
         glib::ParamSpecString::builder("target-language")
           .nick("Target Language")
           .blurb("Target language (ISO code) when task=translate")
+          .mutable_ready()
           .build(),
         glib::ParamSpecEnum::builder_with_default("timestamps", Timestamps::default())
           .nick("Timestamps")
@@ -1726,25 +1729,30 @@ impl ObjectImpl for CaptionsTranscriber {
             "Timestamp granularity to request. Word timestamps or finer give \
                          per-word output buffers; none falls back to one buffer per commit",
           )
+          .mutable_ready()
           .build(),
         glib::ParamSpecEnum::builder_with_default("pnc", Pnc::default())
           .nick("PNC")
           .blurb("Punctuation and capitalization toggle, on supporting families")
+          .mutable_ready()
           .build(),
         glib::ParamSpecEnum::builder_with_default("itn", Itn::default())
           .nick("ITN")
           .blurb("Inverse text normalization toggle, on supporting families")
+          .mutable_ready()
           .build(),
         glib::ParamSpecBoolean::builder("keep-special-tags")
           .nick("Keep Special Tags")
           .blurb("Keep special vocabulary tags in the returned text")
           .default_value(false)
+          .mutable_ready()
           .build(),
         glib::ParamSpecInt::builder("spec-k-drafts")
           .nick("Speculative Drafts")
           .blurb("Speculative-decode draft length; -1 family default, 0 disabled")
           .minimum(-1)
           .default_value(-1)
+          .mutable_ready()
           .build(),
         glib::ParamSpecEnum::builder_with_default("commit-policy", CommitPolicy::default())
           .nick("Commit Policy")
@@ -1983,6 +1991,23 @@ impl ElementImpl for CaptionsTranscriber {
           self.post_error_message(err);
           gst::StateChangeError
         })?;
+      }
+      gst::StateChange::ReadyToPaused => {
+        if let Some(handle) = self.worker.lock().unwrap().as_ref() {
+          handle.cancel.reset();
+        }
+        let run_options = self
+          .settings
+          .lock()
+          .unwrap()
+          .run_options()
+          .map_err(|err| {
+            self.post_error_message(gst::error_msg!(gst::CoreError::Failed, ["{err}"]));
+            gst::StateChangeError
+          })?;
+        self
+          .send_cmd(Cmd::Configure(Box::new(run_options)))
+          .map_err(|_| gst::StateChangeError)?;
       }
       gst::StateChange::PausedToReady => {
         // Do not let a long inference run hold up the state change.
@@ -2256,5 +2281,35 @@ mod tests {
           .build()
       )
     );
+  }
+
+  #[test]
+  fn run_option_properties_are_mutable_in_ready() {
+    gst::init().unwrap();
+    let props = CaptionsTranscriber::properties();
+    for name in [
+      "task",
+      "language",
+      "target-language",
+      "timestamps",
+      "pnc",
+      "itn",
+      "keep-special-tags",
+      "spec-k-drafts",
+    ] {
+      let spec = props
+        .iter()
+        .find(|prop| prop.name() == name)
+        .unwrap_or_else(|| panic!("missing property {name}"));
+      assert!(
+        spec.flags().contains(gst::PARAM_FLAG_MUTABLE_READY),
+        "{name} should be mutable in READY"
+      );
+    }
+    let model_path = props
+      .iter()
+      .find(|prop| prop.name() == "model-path")
+      .unwrap();
+    assert!(!model_path.flags().contains(gst::PARAM_FLAG_MUTABLE_READY));
   }
 }

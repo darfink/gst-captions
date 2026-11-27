@@ -73,6 +73,8 @@ pub struct ModelInfo {
 }
 
 pub enum Cmd {
+  /// Apply run options for the stream starting on READY -> PAUSED.
+  Configure(Box<RunOptions>),
   /// 16 kHz-ish mono f32 samples, at the model's native rate.
   Feed(Vec<f32>),
   /// Flush buffered audio, emit the final text, then start a fresh stream.
@@ -361,22 +363,66 @@ fn run_streaming(
   cmd_rx: &mpsc::Receiver<Cmd>,
   ev_tx: &mpsc::Sender<Ev>,
 ) -> Result<(), String> {
+  let mut run_options = config.run_options.clone();
+  let mut pending_feed: Option<Vec<f32>> = None;
+  let mut open_now = false;
+
   'stream: loop {
+    // Wait until READY -> PAUSED sends Configure (or the first Feed arrives)
+    // before opening the stream, so per-stream options like `language` can be
+    // changed while the element is parked in READY.
+    while !open_now && pending_feed.is_none() {
+      let Ok(cmd) = cmd_rx.recv() else {
+        return Ok(());
+      };
+      match cmd {
+        Cmd::Configure(opts) => {
+          run_options = *opts;
+          open_now = true;
+        }
+        Cmd::Feed(pcm) => {
+          pending_feed = Some(pcm);
+        }
+        Cmd::Finalize => {
+          if ev_tx.send(Ev::Drained).is_err() {
+            return Ok(());
+          }
+        }
+        Cmd::Restart => {
+          if ev_tx.send(Ev::Restarted).is_err() {
+            return Ok(());
+          }
+        }
+        Cmd::Stop => return Ok(()),
+      }
+    }
+    open_now = false;
+
     // The borrow of `session` lives exactly as long as this scope, which
     // is why the pair never needs a name.
     let mut stream = session
-      .stream(&config.run_options, &config.stream_options)
+      .stream(&run_options, &config.stream_options)
       .map_err(|err| format!("failed to start stream: {err}"))?;
     let mut tracker = CommitTracker::default();
     // Committed text published so far when `native_commit` is in effect.
     let mut published = String::new();
 
     loop {
-      let Ok(cmd) = cmd_rx.recv() else {
-        return Ok(());
+      let cmd = if let Some(pcm) = pending_feed.take() {
+        Cmd::Feed(pcm)
+      } else {
+        let Ok(cmd) = cmd_rx.recv() else {
+          return Ok(());
+        };
+        cmd
       };
 
       match cmd {
+        Cmd::Configure(opts) => {
+          run_options = *opts;
+          open_now = true;
+          continue 'stream;
+        }
         Cmd::Feed(pcm) => {
           let audio_ms = pcm.len() as u64 * 1000 / rate.max(1) as u64;
           let started = std::time::Instant::now();
@@ -695,6 +741,7 @@ fn run_chunked(
   cmd_rx: &mpsc::Receiver<Cmd>,
   ev_tx: &mpsc::Sender<Ev>,
 ) -> Result<(), String> {
+  let mut run_options = config.run_options.clone();
   let mut window = Window {
     samples: Vec::new(),
     start_ms: 0,
@@ -711,6 +758,9 @@ fn run_chunked(
     };
 
     match cmd {
+      Cmd::Configure(opts) => {
+        run_options = *opts;
+      }
       Cmd::Feed(pcm) => {
         window.push(&pcm);
         if window.pending_ms < config.chunk_ms {
@@ -723,7 +773,7 @@ fn run_chunked(
         window.pending_ms = 0;
         let started = std::time::Instant::now();
 
-        let words = match infer(session, config, &mut window, false) {
+        let words = match infer(session, config, &run_options, &mut window, false) {
           Ok(words) => words,
           Err(Some(err)) => return Err(err),
           Err(None) => continue,
@@ -757,7 +807,7 @@ fn run_chunked(
         }
       }
       Cmd::Finalize => {
-        let words = match infer(session, config, &mut window, true) {
+        let words = match infer(session, config, &run_options, &mut window, true) {
           Ok(words) => words,
           Err(Some(err)) => return Err(err),
           Err(None) => Vec::new(),
@@ -786,6 +836,7 @@ fn run_chunked(
 fn infer(
   session: &mut Session,
   config: &Config,
+  run_options: &RunOptions,
   window: &mut Window,
   drain: bool,
 ) -> Result<Vec<TimedWord>, Option<String>> {
@@ -793,7 +844,7 @@ fn infer(
     return Ok(Vec::new());
   }
 
-  let transcript = match session.run(&window.samples, &config.run_options) {
+  let transcript = match session.run(&window.samples, run_options) {
     Ok(transcript) => transcript,
     Err(Error::Aborted { .. }) => return Err(None),
     Err(err) => return Err(Some(format!("inference failed: {err}"))),
