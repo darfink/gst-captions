@@ -145,6 +145,38 @@ fn units_from_tokens(tokens: &[Token]) -> Vec<Unit<'_>> {
   out
 }
 
+/// Whether a family commits every token the moment it emits it.
+///
+/// Parakeet's streaming decoders (cache-aware and buffered) never revise an
+/// emitted token: transcribe.cpp marks the whole published token list as
+/// committed after every chunk. What it does not do reliably is turn that
+/// decision into [`StreamText::committed`]; see [`native_committed`].
+///
+/// [`StreamText::committed`]: transcribe_cpp::StreamText::committed
+pub fn commits_every_token(arch: &str) -> bool {
+  arch == "parakeet"
+}
+
+/// The committed text a token-committing family has decided on, if it grew.
+///
+/// transcribe.cpp (through at least 0.5.0) derives a Parakeet stream's committed
+/// prefix by matching the concatenated token texts against the published
+/// hypothesis, which is whitespace-normalized (runs collapsed, ends trimmed).
+/// nemotron-3.5-asr-streaming opens with a bare word-boundary piece and strips
+/// a `<ll-RR>` language tag after each sentence, so the two strings differ in
+/// spacing from the first token on. The match fails, `committed` stays empty
+/// until finalize, and live captions stall for the whole stream.
+///
+/// For these families the hypothesis *is* the committed text, so take whichever
+/// of `library` and `full` is longest while still extending what was already
+/// `published` - the append-only contract the tracker relies on. When the
+/// library reports the prefix correctly, this returns exactly what it reports.
+pub fn native_committed<'a>(library: &'a str, full: &'a str, published: &str) -> Option<&'a str> {
+  [full, library]
+    .into_iter()
+    .find(|candidate| candidate.len() > published.len() && candidate.starts_with(published))
+}
+
 /// Tracks how much of a stream's committed text has already been emitted.
 ///
 /// One instance per stream; drop it when the stream is reset or finalized.
@@ -493,6 +525,72 @@ mod tests {
       units(&transcript_with(TimestampKind::Segment, rows)).len(),
       1
     );
+  }
+
+  #[test]
+  fn native_commit_publishes_the_hypothesis_the_library_failed_to_commit() {
+    // What nemotron-3.5-asr-streaming-0.6b reports two chunks in: the tokens
+    // join to "  Guten Morgen" while the hypothesis is normalized, so the
+    // library's committed prefix is still empty.
+    assert_eq!(
+      native_committed("", "Guten Morgen", ""),
+      Some("Guten Morgen")
+    );
+    assert_eq!(
+      native_committed("", "Guten Morgen und herzlich", "Guten Morgen"),
+      Some("Guten Morgen und herzlich")
+    );
+    // Across a stripped "<de-DE>" tag the hypothesis keeps one space.
+    assert_eq!(
+      native_committed("", "Webinar. Mein Name", "Webinar."),
+      Some("Webinar. Mein Name")
+    );
+  }
+
+  #[test]
+  fn native_commit_never_rewinds_or_rewrites() {
+    // No growth: nothing new to publish.
+    assert_eq!(native_committed("", "Guten Morgen", "Guten Morgen"), None);
+    // A hypothesis that no longer extends the published text is ignored, and
+    // the library's own prefix is used only if it still extends it.
+    assert_eq!(native_committed("", "Gute Morgen", "Guten Morgen"), None);
+    assert_eq!(
+      native_committed("Guten Morgen und", "Gute Morgen und", "Guten Morgen"),
+      Some("Guten Morgen und")
+    );
+  }
+
+  #[test]
+  fn native_commit_defers_to_a_library_that_reports_the_prefix() {
+    // A fixed library commits the whole hypothesis itself.
+    assert_eq!(
+      native_committed("Guten Morgen", "Guten Morgen", ""),
+      Some("Guten Morgen")
+    );
+    assert!(commits_every_token("parakeet"));
+    assert!(!commits_every_token("whisper"));
+  }
+
+  #[test]
+  fn native_commit_yields_timed_words_from_the_reported_tokens() {
+    // The exact token run nemotron-3.5 emits, bare boundary piece first.
+    let tokens = [
+      token(" ", -1, 0, 80),
+      token(" G", -1, 80, 160),
+      token("u", -1, 160, 240),
+      token("ten", -1, 240, 320),
+      token(" M", -1, 400, 480),
+      token("or", -1, 480, 560),
+      token("gen", -1, 560, 640),
+    ];
+    let committed = native_committed("", "Guten Morgen", "").unwrap();
+
+    let mut tracker = CommitTracker::default();
+    let words = tracker.take_new(committed, &units_from_tokens(&tokens), 1_050);
+    assert_eq!(texts(&words), ["Guten"]);
+    // "Morgen" is the trailing row: released once the text has settled.
+    let words = tracker.take_new(committed, &units_from_tokens(&tokens), 1_600);
+    assert_eq!(texts(&words), ["Morgen"]);
   }
 
   #[test]
