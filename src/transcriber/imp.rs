@@ -1996,15 +1996,10 @@ impl ElementImpl for CaptionsTranscriber {
         if let Some(handle) = self.worker.lock().unwrap().as_ref() {
           handle.cancel.reset();
         }
-        let run_options = self
-          .settings
-          .lock()
-          .unwrap()
-          .run_options()
-          .map_err(|err| {
-            self.post_error_message(gst::error_msg!(gst::CoreError::Failed, ["{err}"]));
-            gst::StateChangeError
-          })?;
+        let run_options = self.settings.lock().unwrap().run_options().map_err(|err| {
+          self.post_error_message(gst::error_msg!(gst::CoreError::Failed, ["{err}"]));
+          gst::StateChangeError
+        })?;
         self
           .send_cmd(Cmd::Configure(Box::new(run_options)))
           .map_err(|_| gst::StateChangeError)?;
